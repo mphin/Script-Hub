@@ -37,6 +37,8 @@ const urlArg = url.split(/\/_end_\//)[1]
 const queryObject = parseQueryString(urlArg)
 //$.log("参数:" + $.toStr(queryObject));
 
+// 来源
+const fromType = queryObject.type
 //目标app
 const targetApp = queryObject.target
 const app = targetApp.split('-')[0]
@@ -90,6 +92,7 @@ let jsDelivr = istrue(queryObject.jsDelivr) //开启jsDelivr
 let localText = queryObject.localtext != undefined ? '\n' + queryObject.localtext : '' //纯文本输入
 let ipNoResolve = istrue(queryObject.nore) //ip规则不解析域名
 let sni = queryObject.sni != undefined ? getArgArr(queryObject.sni) : null //sni嗅探
+let pm = queryObject.pm != undefined ? getArgArr(queryObject.pm) : null // pre-matching
 let sufkeepHeader = keepHeader == true ? '&keepHeader=true' : '' //用于保留header的后缀
 let sufjsDelivr = jsDelivr == true ? '&jsDelivr=true' : '' //用于开启jsDeliver的后缀
 
@@ -130,6 +133,7 @@ let name,
   ruletype,
   rulenore,
   rulesni,
+  rulepm,
   rulePandV,
   rulepolicy,
   rulevalue,
@@ -231,6 +235,7 @@ let hostBox = [] //host
 let ruleBox = [] //规则
 let rwBox = [] //重写
 let rwhdBox = [] //HeaderRewrite
+let rwbodyBox = [] // Body Rewrite
 let panelBox = [] //Panel信息
 let jsBox = [] //脚本
 let mockBox = [] //MapLocal或echo-response
@@ -256,6 +261,7 @@ let host = []
 let rules = []
 let URLRewrite = []
 let HeaderRewrite = []
+let BodyRewrite = []
 let MapLocal = []
 let script = []
 let cron = []
@@ -270,7 +276,7 @@ const panelRegex = /\s*[=,]\s*(?:title|content|style|script-name|update-interval
 
 const policyRegex = /^(direct|reject-?(img|video|dict|array|drop|200|tinygif)?(-no-drop)?|\{\{\{[^,]+\}\}\})$/i
 
-const mockRegex = /\s+(?:data-type|status-code|header|data)\s*=/
+const mockRegex = /\s+(?:data-type|status-code|header|data|data-path|mock-data-is-base64)\s*=/
 
 //查询js binarymode相关
 let binaryInfo = $.getval('Parser_binary_info')
@@ -309,6 +315,16 @@ if (binaryInfo != null && binaryInfo.length > 0) {
 
   eval(evJsori)
   eval(evUrlori)
+
+  // [Body Rewrite] 部分 rwbodyBox
+  let bodyRewrite = body.match(/(^|\n)\[Body Rewrite\]\n([\s\S]*?)\s*(\n\[|$)/)?.[2]
+
+  if (bodyRewrite) {
+    for await (let [y, x] of bodyRewrite.match(/[^\r\n]+/g).entries()) {
+      const [_, type, regex, value] = x.match(/^(http-request|http-response)\s+?(.*?)\s+?(.*?)$/)
+      rwbodyBox.push({ type, regex, value })
+    }
+  }
 
   body = body.match(/[^\r\n]+/g)
 
@@ -363,7 +379,7 @@ if (binaryInfo != null && binaryInfo.length > 0) {
         // 加入对逻辑规则的判断
         if (
           x.indexOf(elem) != -1 &&
-          (/^(DOMAIN|RULE-SET)/i.test(x) || /AND|OR|NOT\s*\?\s*?\,\s*?\(\s*?\(.+/i.test(x)) &&
+          (/^(DOMAIN|RULE-SET)/i.test(x) || /(AND|OR|NOT)\s*?,\s*?\(\s*?\(\s*?.+\s*?\)/i.test(x)) &&
           !/,\s*extended-matching/i.test(x)
         ) {
           x = x + ',extended-matching'
@@ -371,6 +387,25 @@ if (binaryInfo != null && binaryInfo.length > 0) {
         }
       } //循环结束
     } //启用sni嗅探结束
+
+    // pre-matching
+    if (pm != null) {
+      for (let i = 0; i < pm.length; i++) {
+        const elem = pm[i].trim()
+        // 加入对逻辑规则的判断
+        if (
+          x.indexOf(elem) != -1 &&
+          (/^(DOMAIN|DOMAIN|DOMAIN-SUFFIX|DOMAIN-KEYWORD|DOMAIN-SET|DOMAIN-WILDCARD|IP-CIDR|IP-CIDR6|GEOIP|IP-ASN|SUBNET|DEST-PORT|SRC-PORT|SRC-IP|RULE-SET)\s*?,/i.test(
+            x
+          ) ||
+            /(AND|OR|NOT)\s*?,\s*?\(\s*?\(\s*?.+\s*?\)/i.test(x)) &&
+          !/,\s*pre-matching/i.test(x)
+        ) {
+          x = x + ',pre-matching'
+          break
+        }
+      } //循环结束
+    } //启用 pre-matching 结束
 
     //ip规则不解析域名
     if (ipNoResolve == true) {
@@ -444,12 +479,126 @@ if (binaryInfo != null && binaryInfo.length > 0) {
       rw_redirect(x, mark)
     }
 
+    // Loon body rewrite 解析 不用这个 因为需要合并到一个脚本中对一个请求/响应进行多个操作
+    // if (/\s((request|response)-body-replace-regex)\s/.test(x)) {
+    //   let [_, regex, __, type, suffix] = x.match(/^(.*?)\s+?((request|response)-body-replace-regex)\s+?(.*?)\s*$/)
+    //   type = `http-${type}`
+    //   const suffixArray = suffix.split(/\s+/)
+    //   const newSuffixArray = []
+    //   for (let index = 0; index < suffixArray.length; index += 2) {
+    //     const key = suffixArray[index]
+    //     const value = suffixArray[index + 1]
+
+    //     if (value != null) {
+    //       newSuffixArray.push(
+    //         `${/\\x20/.test(key) ? `"${key.replace(/\\x20/g, ' ')}"` : key} ${
+    //           /\\x20/.test(value) ? `"${value.replace(/\\x20/g, ' ')}"` : value
+    //         }`
+    //       )
+    //     }
+    //   }
+
+    //   rwbodyBox.push({ type, regex, value: newSuffixArray.join(' ') })
+    // }
+
+    if (/\s((request|response)-body-(json-(add|del|replace)|replace-regex))\s/.test(x)) {
+      let [_, regex, __, httpType, action, ___, suffix] = x.match(
+        /^(.*?)\s+?((request|response)-body-(json-(add|del|replace)|replace-regex))\s+?(.*?)\s*$/
+      )
+      const suffixArray = suffix.split(/\s+/)
+      let newSuffixArray = []
+      if (action === 'json-del') {
+        if (suffix) {
+          newSuffixArray = suffixArray.map(item => (/\\x20/.test(item) ? `${item.replace(/\\x20/g, ' ')}` : item))
+        }
+      } else {
+        for (let index = 0; index < suffixArray.length; index += 2) {
+          const key = suffixArray[index]
+          const value = suffixArray[index + 1]
+
+          if (value != null) {
+            newSuffixArray.push([
+              /\\x20/.test(key) ? `${key.replace(/\\x20/g, ' ')}` : key,
+              /\\x20/.test(value) ? `${value.replace(/\\x20/g, ' ')}` : value,
+            ])
+          }
+        }
+      }
+      const jsurl = 'https://raw.githubusercontent.com/Script-Hub-Org/Script-Hub/main/scripts/body-rewrite.js'
+      const jstype = `http-${httpType}`
+      const jsptn = regex
+      let args = [[action, newSuffixArray]]
+
+      const index = jsBox.findIndex(i => i.jsurl === jsurl && i.jstype === jstype && i.jsptn === jsptn)
+      if (index === -1) {
+        jsBox.push({
+          jsname: `body_rewrite_${y}`,
+          jstype,
+          jsptn,
+          jsurl,
+          rebody: true,
+          size: -1,
+          timeout: '30',
+          jsarg: encodeURIComponent(JSON.stringify(args)),
+          ori: x,
+          num: y,
+        })
+      } else {
+        let jsargs = JSON.parse(decodeURIComponent(jsBox[index].jsarg))
+        jsBox[index].jsarg = encodeURIComponent(JSON.stringify([...jsargs, args[0]]))
+      }
+    }
+
     //header rewrite 解析
-    if (/\sheader-(?:del|add|replace|replace-regex)\s/.test(x)) {
+    if (/\s(response-)?header-(?:del|add|replace|replace-regex)\s/.test(x)) {
       mark = getMark(y, body)
       noteK = isNoteK(x)
       x = x.replace(/^#/, '')
-      rwhdBox.push({ mark, noteK, x })
+      if (fromType === 'loon-plugin') {
+        let [_, __, prefix, isResponseHeaderRewrite, action, suffix] = x.match(
+          /^((.*?\s)(response-)?(header-(?:del|add|replace|replace-regex)\s))\s*(.*?)\s*$/
+        )
+        prefix = `${isResponseHeaderRewrite ? 'http-response' : 'http-request'} ${prefix}${action}`
+        const suffixArray = suffix.split(/\s+/)
+        const newSuffixArray = []
+        if (/\s(response-)?header-del\s/.test(prefix)) {
+          for (let index = 0; index < suffixArray.length; index++) {
+            const key = suffixArray[index]
+            newSuffixArray.push(`${/\\x20/.test(key) ? `"${key.replace(/\\x20/g, ' ')}"` : key}`)
+          }
+        } else if (/\s(response-)?header-replace-regex\s/.test(prefix)) {
+          for (let index = 0; index < suffixArray.length; index += 3) {
+            const key = suffixArray[index]
+            const value = `${
+              /\\x20/.test(suffixArray[index + 1])
+                ? `"${suffixArray[index + 1].replace(/\\x20/g, ' ')}"`
+                : suffixArray[index + 1]
+            } ${
+              /\\x20/.test(suffixArray[index + 2])
+                ? `"${suffixArray[index + 2].replace(/\\x20/g, ' ')}"`
+                : suffixArray[index + 2]
+            }`
+            if (value != null) {
+              newSuffixArray.push(`${key} ${value}`)
+            }
+          }
+        } else {
+          for (let index = 0; index < suffixArray.length; index += 2) {
+            const key = suffixArray[index]
+            const value = suffixArray[index + 1]
+            if (value != null) {
+              newSuffixArray.push(`${key} ${/\\x20/.test(value) ? `"${value.replace(/\\x20/g, ' ')}"` : value}`)
+            }
+          }
+        }
+        // console.log({ mark, noteK, x })
+        for (let index = 0; index < newSuffixArray.length; index++) {
+          let i = newSuffixArray[index]
+          rwhdBox.push({ mark, noteK, x: `${prefix}${i}` })
+        }
+      } else {
+        rwhdBox.push({ mark, noteK, x })
+      }
     }
 
     //(request|response)-(header|body) 解析
@@ -460,7 +609,7 @@ if (binaryInfo != null && binaryInfo.length > 0) {
 
     //rule解析
     if (
-      /^#?(?:domain(?:-suffix|-keyword|-wildcard|-set)?|ip-cidr6?|ip-asn|rule-set|user-agent|url-regex|(de?st|in|src)-port|and|not|or|protocol)\s*,.+/i.test(
+      /^#?(?:domain(?:-suffix|-keyword|-wildcard|-set)?|ip-cidr6?|ip-asn|geoip|rule-set|user-agent|url-regex|(de?st|in|src)-port|src-ip|and|not|or|protocol|subnet)\s*,.+/i.test(
         x
       )
     ) {
@@ -469,11 +618,13 @@ if (binaryInfo != null && binaryInfo.length > 0) {
       ruletype = x.split(/\s*,\s*/)[0].replace(/^#/, '')
       rulenore = /,\s*no-resolve/.test(x) ? ',no-resolve' : ''
       rulesni = /,\s*extended-matching/.test(x) ? ',extended-matching' : ''
+      rulepm = /,\s*pre-matching/.test(x) ? ',pre-matching' : ''
       rulePandV = x
         .replace(/^#/, '')
         .replace(ruletype, '')
         .replace(/\s*,\s*no-resolve/, '')
         .replace(/\s*,\s*extended-matching/, '')
+        .replace(/\s*,\s*pre-matching/, '')
         .replace(/^\s*,\s*/, '')
       rulepolicy = getPolicy(rulePandV)
       rulevalue = rulePandV
@@ -487,7 +638,7 @@ if (binaryInfo != null && binaryInfo.length > 0) {
       } else {
         modistatus = 'no'
       }
-      ruleBox.push({ mark, noteK, ruletype, rulevalue, rulepolicy, rulenore, rulesni, ori: x, modistatus })
+      ruleBox.push({ mark, noteK, ruletype, rulevalue, rulepolicy, rulenore, rulesni, rulepm, ori: x, modistatus })
     } //rule解析结束
 
     //host解析
@@ -745,6 +896,9 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     return curr
   }, [])
 
+  // BodyRewrite 需不要去重 会顺序执行
+  rwbodyBox = [...new Set(rwbodyBox)]
+
   panelBox = panelBox.reduce((curr, next) => {
     /*判断对象中是否已经有该属性  没有的话 push 到 curr数组*/
     obj[next.scriptname] ? '' : (obj[next.scriptname] = curr.push(next))
@@ -853,6 +1007,16 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     rulenore = ruleBox[i].rulenore ? ruleBox[i].rulenore : ''
     rulesni = ruleBox[i].rulesni ? ruleBox[i].rulesni : ''
     rulesni = isLooniOS || isStashiOS ? '' : rulesni
+    rulepm = ruleBox[i].rulepm ? ruleBox[i].rulepm : ''
+    rulepm = isLooniOS || isStashiOS ? '' : rulepm
+    if (
+      !/^(DOMAIN|DOMAIN-SUFFIX|DOMAIN-KEYWORD|DOMAIN-SET|DOMAIN-WILDCARD|IP-CIDR|IP-CIDR6|GEOIP|IP-ASN|AND|OR|NOT|SUBNET|DEST-PORT|SRC-PORT|SRC-IP|RULE-SET)$/i.test(
+        ruletype
+      ) &&
+      isSurgeiOS
+    ) {
+      rulepm = ''
+    }
     modistatus = ruleBox[i].modistatus
     ori = ruleBox[i].ori
     if (/de?st-port/i.test(ruletype)) {
@@ -873,7 +1037,6 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     if (/reject-[^-]+-no-drop/i.test(rulepolicy) && !isLooniOS) {
       rulepolicy = rulepolicy.replace(/-no-drop/i, '')
     }
-
     if (rulepolicy == '') {
       notBuildInPolicy.push(ori)
     } else if (/^proxy$/i.test(rulepolicy) && modistatus == 'no' && (isSurgeiOS || isStashiOS)) {
@@ -881,23 +1044,25 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     } else if (!policyRegex.test(rulepolicy) && !/^proxy$/i.test(rulepolicy) && modistatus == 'no') {
       notBuildInPolicy.push(ori)
     } else if (/^in-port|domain-wildcard$/i.test(ruletype) && isSurgeiOS) {
-      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni)
+      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni + rulepm)
     } else if (/^protocol$/i.test(ruletype) && (isLooniOS || isSurgeiOS)) {
       rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore)
     } else if (/^(?:domain-set|rule-set)$/i.test(ruletype) && (isSurgeiOS || isShadowrocket)) {
-      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni)
+      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni + rulepm)
     } else if (
-      /^(?:domain(-suffix|-keyword)?|ip(-asn|-cidr6?)|user-agent|url-regex|de?st-port)$/i.test(ruletype) &&
+      /^(?:domain(-suffix|-keyword)?|ip(-asn|-cidr6?)|geoip|user-agent|url-regex|de?st-port)$/i.test(ruletype) &&
       !isStashiOS
     ) {
       rulevalue = /,/.test(rulevalue) && !/[()]/.test(rulevalue) ? '"' + rulevalue + '"' : rulevalue
-      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni)
+      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore + rulesni + rulepm)
     } else if (/^(?:and|or|not)$/i.test(ruletype) && !isStashiOS) {
       rules.push(ori)
     } else if (/(?:^domain$|domain-suffix|domain-keyword|ip-|de?st-port)/i.test(ruletype) && isStashiOS) {
       rules.push(mark + noteK2 + '- ' + ruletype + ',' + rulevalue + ',' + rulepolicy + rulenore)
     } else if (/src-port/i.test(ruletype) && (isSurgeiOS || isLooniOS)) {
-      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy)
+      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulepm)
+    } else if (/src-ip|subnet/i.test(ruletype) && isSurgeiOS) {
+      rules.push(mark + noteK + ruletype + ',' + rulevalue + ',' + rulepolicy + rulepm)
     } else if (/url-regex/i.test(ruletype) && isStashiOS && /reject/i.test(rulepolicy)) {
       let Urx2Reject
       if (/DICT/i.test(rulepolicy)) {
@@ -971,11 +1136,17 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     } //switch
   } //reject redirect输出for
 
+  for (let i = 0; i < rwbodyBox.length; i++) {
+    const { type, regex, value } = rwbodyBox[i]
+    BodyRewrite.push(`${type} ${regex} ${value}`)
+  }
+
   //headerRewrite输出
   for (let i = 0; i < rwhdBox.length; i++) {
     noteK = rwhdBox[i].noteK ? '#' : ''
     mark = rwhdBox[i].mark ? rwhdBox[i].mark : ''
     x = rwhdBox[i].x
+    const isResponseHeaderRewrite = /^http-response\s/.test(x)
     switch (targetApp) {
       case 'surge-module':
         HeaderRewrite.push(mark + noteK + x)
@@ -983,6 +1154,9 @@ if (binaryInfo != null && binaryInfo.length > 0) {
 
       case 'loon-plugin':
         x = x.replace(/^http-(request|response)\s+/, '')
+        if (isResponseHeaderRewrite) {
+          x = x.replace(/\sheader-/, ' response-header-')
+        }
         URLRewrite.push(mark + noteK + x)
         break
 
@@ -1000,7 +1174,7 @@ if (binaryInfo != null && binaryInfo.length > 0) {
           noteK4 = '#    '
           noteK2 = '#  '
         }
-        let hdtype = /^http-response\s/.test(x) ? ' response-' : ' request-'
+        let hdtype = isResponseHeaderRewrite ? ' response-' : ' request-'
         x = x.replace(/^http-(?:request|response)\s+/, '').replace(/\s+header-/, hdtype)
         HeaderRewrite.push(mark + `${noteK4}- >-${noteKn6}` + x)
         break
@@ -1043,10 +1217,22 @@ if (binaryInfo != null && binaryInfo.length > 0) {
     switch (targetApp) {
       case 'surge-module':
         mockheader =
-          keepHeader == true && mockBox[i].mockheader && !/&contentType=/.test(mockBox[i].mockheader)
+          mockBox[i].mockheader && !/&contentType=/.test(mockBox[i].mockheader)
             ? ' header="' + mockBox[i].mockheader + '"'
             : ''
         MapLocal.push(mark + noteK + mockptn + mocktype + mockurl + mockstatus + mockheader)
+        break
+      case 'loon-plugin':
+        MapLocal.push(
+          mark +
+            noteK +
+            mockptn +
+            ' mock-response-body' +
+            mocktype +
+            (mockBox[i].datapath ? ` data-path=${mockBox[i].datapath}` : ` data="${mockBox[i].data}"`) +
+            mockstatus +
+            (mockBox[i].mockbase64 ? ' mock-data-is-base64=true' : '')
+        )
         break
     } //switch
   } //Mock输出for
@@ -1364,6 +1550,8 @@ if (binaryInfo != null && binaryInfo.length > 0) {
 
       HeaderRewrite = (HeaderRewrite[0] || '') && `[Header Rewrite]\n${HeaderRewrite.join('\n')}`
 
+      BodyRewrite = (BodyRewrite[0] || '') && `[Body Rewrite]\n${BodyRewrite.join('\n')}`
+
       MapLocal = (MapLocal[0] || '') && `[Map Local]\n${MapLocal.join('\n\n')}`
 
       host = (host[0] || '') && `[Host]\n${host.join('\n')}`
@@ -1395,6 +1583,8 @@ ${rules}
 ${URLRewrite}
 
 ${HeaderRewrite}
+
+${BodyRewrite}
 
 ${MapLocal}
 
@@ -1623,7 +1813,7 @@ function getJsInfo(x, regex, parserRegex) {
       ? panelRegex
       : /script-path\s*=/.test(x)
       ? jsRegex
-      : /\s(data-type|data)\s*=/.test(x)
+      : /\s(data-type|data|data-path)\s*=/.test(x)
       ? mockRegex
       : ''
   if (regex.test(x)) {
@@ -1720,7 +1910,7 @@ async function isBinaryMode(url, name) {
 //获取mock参数
 function getMockInfo(x, mark, y) {
   let noteK = isNoteK(x)
-  let mockptn, mockurl, mockheader, mocktype, mockstatus
+  let mockptn, mockurl, mockheader, mocktype, mockstatus, oritype, datapath, data, mockbase64
   if (/url\s+echo-response\s/.test(x)) {
     mockptn = x.split(/\s+url\s+/)[0]
     mockurl = x.split(/\s+echo-response\s+/)[2]
@@ -1733,17 +1923,77 @@ function getMockInfo(x, mark, y) {
       .split(/\s+/)[0]
       .replace(/^#/g, '')
       .replace(/^"(.+)"$/, '$1')
-    mockurl = getJsInfo(x, /\s+data\s*=\s*/).replace(/^"(.*)"$/, '$1')
+    datapath = getJsInfo(x, /\s+data-path\s*=\s*/).replace(/^"(.*)"$/, '$1')
+    data = getJsInfo(x, /\s+data\s*=\s*/).replace(/^"(.*)"$/, '$1')
+    mockurl = data || datapath
+    mockbase64 = getJsInfo(x, /\s+mock-data-is-base64\s*=\s*/)
     mocktype = getJsInfo(x, /\s+data-type\s*=\s*/) || 'file'
+    oritype = mocktype
     mockstatus = getJsInfo(x, /\s+status-code\s*=\s*/)
     mockheader = getJsInfo(x, /\s+header\s*=\s*/).replace(/^"(.+)"$/, '$1')
+    if (/\smock-response-body\s/.test(x)) {
+      // Loon data-type: body的类型，json,text,css,html,javascript,plain,png,gif,jpeg,tiff,svg,mp4,form-data 应该设置对应的 Content-Type
+      switch (mocktype) {
+        case 'json':
+          mockheader = 'Content-Type:text/json'
+          break
+        case 'text':
+          mockheader = 'Content-Type:text/plain'
+          break
+        case 'css':
+          mockheader = 'Content-Type:text/css'
+          break
+        case 'html':
+          mockheader = 'Content-Type:text/html'
+          break
+        case 'javascript':
+          mockheader = 'Content-Type:text/javascript'
+          break
+        case 'plain':
+          mockheader = 'Content-Type:text/plain'
+          break
+        case 'png':
+          mockheader = 'Content-Type:image/png'
+          break
+        case 'gif':
+          mockheader = 'Content-Type:image/gif'
+          break
+        case 'jpeg':
+          mockheader = 'Content-Type:image/jpeg'
+          break
+        case 'tiff':
+          mockheader = 'Content-Type:image/tiff'
+          break
+        case 'svg':
+          mockheader = 'Content-Type:image/svg+xml'
+          break
+        case 'mp4':
+          mockheader = 'Content-Type:video/mp4'
+          break
+        case 'form-data':
+          mockheader = 'Content-Type:application/x-www-form-urlencoded'
+          break
+      }
+      mocktype = datapath ? 'file' : 'text'
+      if (mockbase64) {
+        // Surge 的 base64 仅支持内容
+        mocktype = 'base64'
+      }
+    }
+    if (oritype === 'base64') {
+      mockbase64 = true
+    }
   }
-
   switch (targetApp) {
     case 'surge-module':
-      mockBox.push({ mark, noteK, mockptn, mockurl, mockheader, mockstatus, mocktype, ori: x, mocknum: y })
+      if (mockbase64 && datapath) {
+        const e = '暂不支持远程 base64'
+        console.log(e)
+        shNotify(e)
+      } else {
+        mockBox.push({ mark, noteK, mockptn, mockurl, mockheader, mockstatus, mocktype, ori: x, mocknum: y })
+      }
       break
-
     case 'shadowrocket-module':
     case 'loon-plugin':
     case 'stash-stoverride':
@@ -1754,50 +2004,65 @@ function getMockInfo(x, mark, y) {
       else if (/200|blank|^[\s\S]?$/i.test(mfile)) m2rType = 'reject-200'
       else if (/img|tinygif/i.test(mfile) || mocktype == 'tiny-gif') m2rType = 'reject-img'
       else m2rType = null
-
       let jsname =
         mocktype == 'file' ? mockurl.substring(mockurl.lastIndexOf('/') + 1, mockurl.lastIndexOf('.')) : 'echoResponse'
       m2rType != null && rwBox.push({ mark, noteK, rwptn: mockptn, rwvalue: '-', rwtype: m2rType })
-      let proto
-      if (m2rType == null && mocktype == 'file') {
-        proto = isStashiOS ? 'true' : ''
-        mockheader =
-          mockheader != '' && !/&contentType=/.test(mockheader)
-            ? '&header=' + encodeURIComponent(mockheader)
-            : mockheader != '' && /&contentType=/.test(mockheader)
-            ? mockheader
-            : ''
-        if (keepHeader == false) mockheader = ''
+      if (targetApp === 'loon-plugin') {
+        mockBox.push({
+          mark,
+          noteK,
+          mockptn,
+          data,
+          datapath,
+          mockurl,
+          mockstatus,
+          mocktype: oritype,
+          mockbase64,
+          ori: x,
+          mocknum: y,
+        })
+      } else {
+        let proto
+        if (m2rType == null && mocktype == 'file') {
+          proto = isStashiOS ? 'true' : ''
+          mockheader =
+            mockheader != '' && !/&contentType=/.test(mockheader)
+              ? '&header=' + encodeURIComponent(mockheader)
+              : mockheader != '' && /&contentType=/.test(mockheader)
+              ? mockheader
+              : ''
+          if (keepHeader == false) mockheader = ''
 
-        mockurl = `http://script.hub/convert/_start_/${mockurl}/_end_/${mfile}?type=mock&target-app=${targetApp}${mockheader}${sufkeepHeader}${sufjsDelivr}`
-        jsBox.push({
-          mark,
-          noteK,
-          jsname,
-          jstype: 'http-request',
-          jsptn: mockptn,
-          jsurl: mockurl,
-          proto,
-          timeout: '60',
-          ori: x,
-          num: y,
-        })
-      } else if (m2rType == null && mocktype != 'file') {
-        jsurl = 'https://raw.githubusercontent.com/Script-Hub-Org/Script-Hub/main/scripts/echo-response.js'
-        mockstatus = mockstatus ? '&status-code=' + mockstatus : ''
-        jsarg = `${mocktype}=` + encodeURIComponent(mockurl) + mockstatus
-        jsBox.push({
-          mark,
-          noteK,
-          jsname,
-          jstype: 'http-request',
-          jsptn: mockptn,
-          jsurl,
-          jsarg,
-          timeout: '60',
-          ori: x,
-          num: y,
-        })
+          mockurl = `http://script.hub/convert/_start_/${mockurl}/_end_/${mfile}?type=mock&target-app=${targetApp}${mockheader}${sufkeepHeader}${sufjsDelivr}`
+          jsBox.push({
+            mark,
+            noteK,
+            jsname,
+            jstype: 'http-request',
+            jsptn: mockptn,
+            jsurl: mockurl,
+            proto,
+            timeout: '60',
+            ori: x,
+            num: y,
+          })
+        } else if (m2rType == null && mocktype != 'file') {
+          jsurl = 'https://raw.githubusercontent.com/Script-Hub-Org/Script-Hub/main/scripts/echo-response.js'
+          mockstatus = mockstatus ? '&status-code=' + mockstatus : ''
+          jsarg = `${mocktype}=` + encodeURIComponent(mockurl) + mockstatus
+          jsBox.push({
+            mark,
+            noteK,
+            jsname,
+            jstype: 'http-request',
+            jsptn: mockptn,
+            jsurl,
+            jsarg,
+            timeout: '60',
+            ori: x,
+            num: y,
+          })
+        }
       }
       break
   } //switch
